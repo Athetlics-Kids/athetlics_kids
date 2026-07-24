@@ -27,7 +27,7 @@ export function PaymentStatusBadge({ status }: PaymentStatusBadgeProps) {
 }
 
 interface PlanTypeBadgeProps {
-  plan: 'monthly' | 'quarterly' | 'semiannual' | 'annual'
+  plan: 'monthly' | 'quarterly' | 'semiannual' | 'annual' | 'one_off'
 }
 
 export function PlanTypeBadge({ plan }: PlanTypeBadgeProps) {
@@ -36,6 +36,7 @@ export function PlanTypeBadge({ plan }: PlanTypeBadgeProps) {
     quarterly: 'Trimestral',
     semiannual: 'Semestral',
     annual: 'Anual',
+    one_off: 'Clase única',
   }
 
   return (

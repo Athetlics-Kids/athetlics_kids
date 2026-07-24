@@ -12,6 +12,7 @@ export const PLAN_PRICES = {
   quarterly: 480_000,
   semiannual: 900_000,
   annual: 1_680_000,
+  one_off: 50_000,
 } as const
 
 export function formatCurrency(
@@ -43,13 +44,37 @@ export function formatDate(
   return dateFnsFormat(new Date(date), pattern, { locale: dateLocale })
 }
 
+/** Format a Date for <input type="date"> without UTC shift. */
+export function toInputDate(date: Date | string) {
+  const d = typeof date === 'string' ? new Date(date) : date
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
+}
+
 export function formatPlanLabel(plan: keyof typeof PLAN_PRICES) {
   const labels = {
     monthly: 'Mensual',
     quarterly: 'Trimestral',
     semiannual: 'Semestral',
     annual: 'Anual',
+    one_off: 'Clase única',
   }
 
   return `${labels[plan]} - ${formatCurrency(PLAN_PRICES[plan])}`
+}
+
+export function formatPlanConfigLabel(
+  label: string,
+  price: number,
+  classesPerWeek?: number
+) {
+  const freq =
+    classesPerWeek && classesPerWeek > 0
+      ? ` · ${classesPerWeek} clase${classesPerWeek === 1 ? '' : 's'}/sem`
+      : ''
+  // Si el label ya incluye la frecuencia, no duplicar
+  const hasFreq = /clase/i.test(label)
+  return `${label}${hasFreq ? '' : freq} - ${formatCurrency(price)}`
 }

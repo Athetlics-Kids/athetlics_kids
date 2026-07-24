@@ -11,11 +11,22 @@ import type {
   Student,
   Teacher,
   UserRole,
+  ClassLocation,
 } from '@/types'
 
 function formatTime(value: string | null | undefined) {
   if (!value) return ''
   return value.slice(0, 5)
+}
+
+/** Parse YYYY-MM-DD as local calendar date (avoids UTC day shift). */
+export function parseDateOnly(value: string | Date) {
+  if (value instanceof Date) {
+    return new Date(value.getFullYear(), value.getMonth(), value.getDate())
+  }
+  const raw = String(value).slice(0, 10)
+  const [y, m, d] = raw.split('-').map(Number)
+  return new Date(y, m - 1, d)
 }
 
 export function mapStudent(row: Record<string, unknown>): Student {
@@ -30,9 +41,10 @@ export function mapStudent(row: Record<string, unknown>): Student {
     teacherName: row.teacher_name as string,
     planType: row.plan_type as PlanType,
     paymentStatus: row.payment_status as PaymentStatus,
-    enrolledAt: new Date(row.enrolled_at as string),
+    enrolledAt: parseDateOnly(row.enrolled_at as string),
     progress: row.progress as number,
     level: row.level as string,
+    address: (row.address as string) || undefined,
   }
 }
 
@@ -58,6 +70,9 @@ export function mapTeacher(
     schedule: teacherSchedules,
     studentsCount: Number(row.students_count ?? 0),
     earnings: Number(row.earnings ?? 0),
+    earningsProjected: Number(row.earnings_projected ?? row.earnings ?? 0),
+    earningsActual: Number(row.earnings_actual ?? 0),
+    pendingBalance: Number(row.pending_balance ?? row.earnings_actual ?? 0),
     isActive: row.is_active as boolean,
     createdAt: new Date(row.created_at as string),
   }
@@ -79,9 +94,9 @@ export function mapClassSession(row: Record<string, unknown>): ClassSession {
   return {
     id: row.id as string,
     title: row.title as string,
-    teacherId: row.teacher_id as string,
-    teacherName: row.teacher_name as string,
-    date: new Date(row.class_date as string),
+    teacherId: (row.teacher_id as string) || undefined,
+    teacherName: (row.teacher_name as string) || 'Sin profesor',
+    date: parseDateOnly(row.class_date as string),
     startTime: formatTime(row.start_time as string),
     endTime: formatTime(row.end_time as string),
     capacity: row.capacity as number,
@@ -89,6 +104,29 @@ export function mapClassSession(row: Record<string, unknown>): ClassSession {
     status: row.status as ClassStatus,
     students: (row.students as string[]) ?? [],
     level: row.level as string,
+    locationType: (row.location_type as ClassLocation) || 'local',
+    teacherFee: Number(row.teacher_fee ?? 0),
+    classKind: (row.class_kind as import('@/types').ClassKind) || 'plan',
+    paymentId: (row.payment_id as string) || undefined,
+    studentId: (row.student_id as string) || undefined,
+    address: (row.address as string) || undefined,
+    teacherPaidAt: row.teacher_paid_at
+      ? new Date(row.teacher_paid_at as string)
+      : undefined,
+  }
+}
+
+export function mapTeacherPayout(row: Record<string, unknown>): import('@/types').TeacherPayout {
+  return {
+    id: row.id as string,
+    teacherId: row.teacher_id as string,
+    teacherName: row.teacher_name as string,
+    classSessionId: (row.class_session_id as string) || undefined,
+    classTitle: row.class_title as string,
+    classDate: parseDateOnly(row.class_date as string),
+    amount: Number(row.amount),
+    method: (row.method as string) || 'Efectivo',
+    paidAt: new Date(row.paid_at as string),
   }
 }
 
@@ -103,9 +141,16 @@ export function mapPayment(row: Record<string, unknown>): Payment {
     status: row.status as PaymentStatus,
     method: row.method as string,
     planType: row.plan_type as PlanType,
-    dueDate: new Date(row.due_date as string),
-    paidDate: row.paid_date ? new Date(row.paid_date as string) : undefined,
+    dueDate: parseDateOnly(row.due_date as string),
+    paidDate: row.paid_date ? parseDateOnly(row.paid_date as string) : undefined,
     invoiceNumber: row.invoice_number as string,
+    classesGenerated: Boolean(row.classes_generated),
+    planStartDate: row.plan_start_date
+      ? parseDateOnly(row.plan_start_date as string)
+      : undefined,
+    planEndDate: row.plan_end_date
+      ? parseDateOnly(row.plan_end_date as string)
+      : undefined,
   }
 }
 
@@ -115,7 +160,7 @@ export function mapAttendance(row: Record<string, unknown>, studentName?: string
     studentId: row.student_id as string,
     studentName: studentName ?? (row.student_name as string) ?? '',
     classId: row.class_session_id as string,
-    date: new Date(row.attendance_date as string),
+    date: parseDateOnly(row.attendance_date as string),
     present: row.present as boolean,
     notes: (row.notes as string) || undefined,
   }

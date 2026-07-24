@@ -10,7 +10,14 @@
     "db:setup": "node scripts/setup-db.mjs",
     "db:clear": "node scripts/clear-data.mjs",
     "db:reset": "node scripts/run-sql.mjs supabase/reset-data.sql",
-    "db:reset-full": "node scripts/run-sql.mjs supabase/reset-full.sql && node scripts/setup-db.mjs"
+    "db:reset-full": "node scripts/run-sql.mjs supabase/reset-full.sql && node scripts/setup-db.mjs",
+    "db:migrate-settings": "node scripts/run-sql.mjs supabase/migrations/20260720000000_plans_levels.sql",
+    "db:migrate-accounting": "node scripts/run-sql.mjs supabase/migrations/20260722000000_accounting.sql",
+    "db:migrate-scheduling": "node scripts/run-sql.mjs supabase/migrations/20260722000001_plan_scheduling.sql",
+    "db:migrate-earnings-monthly": "node scripts/run-sql.mjs supabase/migrations/20260722000002_teacher_earnings_monthly.sql",
+    "db:migrate-teacher-payouts": "node scripts/run-sql.mjs supabase/migrations/20260723000000_teacher_payouts.sql",
+    "db:migrate-address": "node scripts/run-sql.mjs supabase/migrations/20260723000001_student_class_address.sql",
+    "db:migrate-one-off-plan": "node scripts/run-sql.mjs supabase/migrations/20260723000002_one_off_plan.sql && node scripts/run-sql.mjs supabase/migrations/20260723000003_one_off_plan_seed.sql"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.9.1",

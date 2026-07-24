@@ -36,6 +36,9 @@ export default function TeacherDashboardPage() {
     schedule: [],
     studentsCount: 0,
     earnings: 0,
+    earningsProjected: 0,
+    earningsActual: 0,
+    pendingBalance: 0,
     isActive: true,
     createdAt: new Date(),
   }
@@ -59,7 +62,7 @@ export default function TeacherDashboardPage() {
       </div>
 
       {/* Stats Grid */}
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
         <StatCard
           title="Clases Hoy"
           value={todayClasses.length}
@@ -75,18 +78,25 @@ export default function TeacherDashboardPage() {
           index={1}
         />
         <StatCard
-          title="Ganancias del Mes"
-          value={formatCurrency(teacher.earnings)}
+          title="Proyección del Mes"
+          value={formatCurrency(teacher.earningsProjected)}
+          icon={DollarSign}
+          iconColor="bg-secondary/10 text-secondary"
+          index={2}
+        />
+        <StatCard
+          title="Saldo Pendiente"
+          value={formatCurrency(teacher.pendingBalance)}
           icon={DollarSign}
           iconColor="bg-green-100 text-green-600 dark:bg-green-900/30 dark:text-green-400"
-          index={2}
+          index={3}
         />
         <StatCard
           title="Próxima Clase"
           value={todayClasses[0]?.startTime || 'Sin clases'}
           icon={Clock}
           iconColor="bg-accent/10 text-accent"
-          index={3}
+          index={4}
         />
       </div>
 

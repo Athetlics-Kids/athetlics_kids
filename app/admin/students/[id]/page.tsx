@@ -3,9 +3,11 @@
 import { motion } from 'framer-motion'
 import { use } from 'react'
 import Link from 'next/link'
+import { toast } from 'sonner'
 import {
   ArrowLeft,
   Calendar,
+  CalendarX,
   CreditCard,
   Mail,
   Phone,
@@ -29,6 +31,7 @@ import {
   fetchPayments,
   fetchStudentById,
 } from '@/lib/supabase/data'
+import { deleteAllStudentClasses } from '@/lib/supabase/mutations'
 import { createClient } from '@/lib/supabase/client'
 import { formatCurrency, formatDate } from '@/lib/locale'
 
@@ -42,11 +45,35 @@ export default function StudentDetailPage({ params }: { params: Promise<{ id: st
   const { data: attendanceRecords = [] } = useSupabaseLoader((client) =>
     fetchAttendanceRecords(client)
   )
-  const { data: classSessions = [] } = useSupabaseLoader((client) => fetchClassSessions(client))
+  const { data: classSessions = [], refetch: refetchClasses } = useSupabaseLoader((client) =>
+    fetchClassSessions(client)
+  )
 
   const parent = parents.find((p) => p.id === student?.parentId)
   const studentPayments = payments.filter((p) => p.studentId === id)
   const studentAttendance = attendanceRecords.filter((a) => a.studentId === id)
+
+  const handleDeleteAllClasses = async () => {
+    if (!student) return
+    if (
+      !confirm(
+        `¿Eliminar TODAS las clases de ${student.name}?\nPodrás volver a agendarlas desde Pagos.`
+      )
+    ) {
+      return
+    }
+    const result = await deleteAllStudentClasses(createClient(), student.id)
+    if (!result.ok) {
+      toast.error(result.error)
+      return
+    }
+    toast.success(
+      result.data.count === 0
+        ? 'No había clases para eliminar'
+        : `Se eliminaron ${result.data.count} clase(s)`
+    )
+    refetchClasses()
+  }
 
   if (loading) {
     return <div className="py-20 text-center text-muted-foreground">Cargando alumno...</div>
@@ -66,16 +93,22 @@ export default function StudentDetailPage({ params }: { params: Promise<{ id: st
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center gap-4">
-        <Button variant="ghost" size="icon" asChild>
-          <Link href="/admin/students">
-            <ArrowLeft className="h-4 w-4" />
-          </Link>
-        </Button>
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">{student.name}</h1>
-          <p className="text-muted-foreground">Detalle del alumno</p>
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex items-center gap-4">
+          <Button variant="ghost" size="icon" asChild>
+            <Link href="/admin/students">
+              <ArrowLeft className="h-4 w-4" />
+            </Link>
+          </Button>
+          <div>
+            <h1 className="text-2xl font-bold tracking-tight">{student.name}</h1>
+            <p className="text-muted-foreground">Detalle del alumno</p>
+          </div>
         </div>
+        <Button variant="outline" className="text-destructive" onClick={handleDeleteAllClasses}>
+          <CalendarX className="mr-2 h-4 w-4" />
+          Eliminar todas las clases
+        </Button>
       </div>
 
       <div className="grid gap-6 lg:grid-cols-3">
@@ -103,6 +136,12 @@ export default function StudentDetailPage({ params }: { params: Promise<{ id: st
                 <User className="h-4 w-4 text-muted-foreground" />
                 <span>{student.teacherName}</span>
               </div>
+              {student.address && (
+                <div className="flex items-start gap-3 text-sm">
+                  <Calendar className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+                  <span>{student.address}</span>
+                </div>
+              )}
               <div className="flex items-center gap-3 text-sm">
                 <Award className="h-4 w-4 text-muted-foreground" />
                 <span>Progreso: {student.progress}%</span>
