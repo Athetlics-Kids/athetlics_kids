@@ -35,6 +35,9 @@ export interface Student {
   progress: number
   level: string
   address?: string
+  isActive: boolean
+  /** True si existe al menos un pago (bloquea borrado físico). */
+  hasPayments: boolean
 }
 
 export interface Teacher {
@@ -49,10 +52,12 @@ export interface Teacher {
   /** Proyección del mes: todas las clases agendadas (no canceladas) */
   earnings: number
   earningsProjected: number
-  /** Saldo pendiente: clases ejecutadas (fecha pasada) aún no pagadas al profesor */
+  /** Saldo pendiente: clases del día o anteriores aún no pagadas al profesor */
   earningsActual: number
   pendingBalance: number
   isActive: boolean
+  /** False si tiene clases, alumnos o pagos a profesor (solo se puede inactivar). */
+  canHardDelete: boolean
   createdAt: Date
 }
 

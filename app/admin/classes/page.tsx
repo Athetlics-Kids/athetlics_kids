@@ -9,6 +9,9 @@ import {
   Users,
   User,
   Calendar as CalendarIcon,
+  LayoutList,
+  CalendarDays,
+  LayoutGrid,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -59,6 +62,8 @@ import {
 } from '@/lib/supabase/mutations'
 import { createClient } from '@/lib/supabase/client'
 import { fetchStudents } from '@/lib/supabase/data'
+import { ClassesListView } from '@/components/classes/classes-list-view'
+import { ClassesBoardView } from '@/components/classes/classes-board-view'
 
 const timeSlots = [
   '08:00', '09:00', '10:00', '11:00', '12:00', '13:00',
@@ -71,7 +76,6 @@ type ClassForm = {
   startTime: string
   teacherId: string
   studentId: string
-  capacity: string
   level: string
   locationType: ClassLocation
   address: string
@@ -83,7 +87,6 @@ const emptyForm: ClassForm = {
   startTime: '',
   teacherId: '',
   studentId: '',
-  capacity: '12',
   level: '',
   locationType: 'local',
   address: '',
@@ -91,6 +94,10 @@ const emptyForm: ClassForm = {
 
 export default function ClassesPage() {
   const [currentDate, setCurrentDate] = useState(new Date())
+  const [viewMode, setViewMode] = useState<'list' | 'week' | 'board'>('list')
+  const [quickFilter, setQuickFilter] = useState<'all' | 'today' | 'pending' | 'unpaid'>(
+    'all'
+  )
   const [selectedClass, setSelectedClass] = useState<ClassSession | null>(null)
   const [filterTeacher, setFilterTeacher] = useState<string>('all')
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false)
@@ -128,6 +135,8 @@ export default function ClassesPage() {
 
   const weekStart = startOfWeek(currentDate, { weekStartsOn: 1 })
   const weekDays = Array.from({ length: 7 }, (_, i) => addDays(weekStart, i))
+  const today = new Date()
+  const todayKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`
 
   const unassignedCount = classSessions.filter(
     (s) => !s.teacherId || s.teacherName === 'Sin profesor'
@@ -135,12 +144,39 @@ export default function ClassesPage() {
 
   const filteredSessions = classSessions.filter((s) => {
     if (filterTeacher === 'unassigned') {
-      return !s.teacherId || s.teacherName === 'Sin profesor'
+      if (s.teacherId && s.teacherName !== 'Sin profesor') return false
+    } else if (filterTeacher === 'one_off') {
+      if (s.classKind !== 'one_off') return false
+    } else if (filterTeacher !== 'all') {
+      if (s.teacherId !== filterTeacher) return false
     }
-    if (filterTeacher === 'one_off') return s.classKind === 'one_off'
-    if (filterTeacher === 'all') return true
-    return s.teacherId === filterTeacher
+
+    if (quickFilter === 'today') return isSameDay(s.date, today)
+    if (quickFilter === 'pending') {
+      return (
+        s.status !== 'cancelled' &&
+        (!s.teacherId || s.teacherName === 'Sin profesor')
+      )
+    }
+    if (quickFilter === 'unpaid') {
+      const dateKey = `${s.date.getFullYear()}-${String(s.date.getMonth() + 1).padStart(2, '0')}-${String(s.date.getDate()).padStart(2, '0')}`
+      return (
+        s.status !== 'cancelled' &&
+        Boolean(s.teacherId) &&
+        !s.teacherPaidAt &&
+        dateKey <= todayKey
+      )
+    }
+    return true
   })
+
+  const goPrev = () => {
+    setCurrentDate(subWeeks(currentDate, 1))
+  }
+
+  const goNext = () => {
+    setCurrentDate(addWeeks(currentDate, 1))
+  }
 
   const getClassesForDayAndTime = (day: Date, time: string) => {
     return filteredSessions.filter(
@@ -152,9 +188,9 @@ export default function ClassesPage() {
     if (session.teacherPaidAt) {
       return 'bg-emerald-600/20 border-emerald-600/50 text-emerald-900 hover:bg-emerald-600/30 dark:text-emerald-100'
     }
-    const percentage = (session.enrolled / session.capacity) * 100
-    if (percentage >= 90) return 'bg-red-500/10 border-red-500/30 hover:bg-red-500/20'
-    if (percentage >= 70) return 'bg-yellow-500/10 border-yellow-500/30 hover:bg-yellow-500/20'
+    if (session.status === 'cancelled') {
+      return 'bg-muted opacity-60'
+    }
     return 'bg-blue-500/10 border-blue-500/30 hover:bg-blue-500/20'
   }
 
@@ -179,7 +215,6 @@ export default function ClassesPage() {
       startTime: session.startTime,
       teacherId: session.teacherId || 'none',
       studentId: session.studentId || '',
-      capacity: String(session.capacity),
       level: session.level,
       locationType: session.locationType || 'local',
       address: session.address ?? '',
@@ -201,7 +236,6 @@ export default function ClassesPage() {
       level: student.level || f.level,
       teacherId: student.teacherId || f.teacherId || 'none',
       address: student.address ?? '',
-      capacity: '1',
     }))
   }
 
@@ -213,6 +247,15 @@ export default function ClassesPage() {
     if (!editingId && !form.studentId) {
       toast.error('Selecciona el alumno de la clase')
       return
+    }
+    if (!editingId && form.studentId) {
+      const student = students.find((s) => s.id === form.studentId)
+      if (!student || student.paymentStatus !== 'paid') {
+        toast.error(
+          'El alumno no ha pagado. Márcalo como pagado en Pagos antes de agendar la clase.'
+        )
+        return
+      }
     }
     if (form.locationType === 'domicilio') {
       const student = students.find((s) => s.id === form.studentId)
@@ -241,7 +284,7 @@ export default function ClassesPage() {
       teacherId,
       classDate: form.classDate,
       startTime: form.startTime,
-      capacity: Number(form.capacity) || (form.studentId ? 1 : 12),
+      capacity: 1,
       level: form.level,
       locationType: form.locationType,
       address,
@@ -312,7 +355,13 @@ export default function ClassesPage() {
       return
     }
     const student = students.find((s) => s.id === oneOff.studentId)
-    const address = student?.address?.trim() || ''
+    if (!student || student.paymentStatus !== 'paid') {
+      toast.error(
+        'El alumno no ha pagado. Márcalo como pagado en Pagos antes de agendar la clase.'
+      )
+      return
+    }
+    const address = student.address?.trim() || ''
     if (oneOff.locationType === 'domicilio' && !address) {
       toast.error('Ese alumno no tiene dirección. Agrégala en Alumnos primero.')
       return
@@ -366,7 +415,8 @@ export default function ClassesPage() {
     const today = new Date()
     const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`
     const classStr = toInputDate(session.date)
-    return classStr < todayStr
+    // Desde el día de la clase se puede registrar el pago al profesor
+    return classStr <= todayStr
   }
 
   const handleMarkTeacherPaid = async (session: ClassSession) => {
@@ -435,7 +485,7 @@ export default function ClassesPage() {
                       <SelectValue placeholder="¿Quién requiere la clase?" />
                     </SelectTrigger>
                     <SelectContent>
-                      {students.map((s) => (
+                      {students.filter((s) => s.isActive).map((s) => (
                         <SelectItem key={s.id} value={s.id}>
                           {s.name}
                         </SelectItem>
@@ -544,48 +594,35 @@ export default function ClassesPage() {
                   </SelectContent>
                 </Select>
               </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div className="grid gap-2">
-                  <Label htmlFor="capacity">Capacidad máxima</Label>
-                  <Input
-                    id="capacity"
-                    type="number"
-                    min={1}
-                    max={30}
-                    value={form.capacity}
-                    onChange={(e) => setForm((f) => ({ ...f, capacity: e.target.value }))}
-                  />
-                </div>
-                <div className="grid gap-2">
-                  <Label>Nivel</Label>
-                  <Select
-                    value={form.level}
-                    onValueChange={(value) => setForm((f) => ({ ...f, level: value }))}
-                    disabled={levels.length === 0}
-                  >
-                    <SelectTrigger>
-                      <SelectValue
-                        placeholder={
-                          levels.length === 0
-                            ? 'Sin niveles — Configuración'
-                            : 'Nivel'
-                        }
-                      />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {levels.map((level) => (
-                        <SelectItem key={level.id} value={level.label}>
-                          {level.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  {levels.length === 0 && (
-                    <p className="text-xs text-muted-foreground">
-                      Configura niveles en Configuración → Niveles
-                    </p>
-                  )}
-                </div>
+              <div className="grid gap-2">
+                <Label>Nivel</Label>
+                <Select
+                  value={form.level}
+                  onValueChange={(value) => setForm((f) => ({ ...f, level: value }))}
+                  disabled={levels.length === 0}
+                >
+                  <SelectTrigger>
+                    <SelectValue
+                      placeholder={
+                        levels.length === 0
+                          ? 'Sin niveles — Configuración'
+                          : 'Nivel'
+                      }
+                    />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {levels.map((level) => (
+                      <SelectItem key={level.id} value={level.label}>
+                        {level.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {levels.length === 0 && (
+                  <p className="text-xs text-muted-foreground">
+                    Configura niveles en Configuración → Niveles
+                  </p>
+                )}
               </div>
             </div>
             <DialogFooter>
@@ -628,7 +665,7 @@ export default function ClassesPage() {
                   <SelectValue placeholder="Seleccionar alumno" />
                 </SelectTrigger>
                 <SelectContent>
-                  {students.map((s) => (
+                  {students.filter((s) => s.isActive).map((s) => (
                     <SelectItem key={s.id} value={s.id}>
                       {s.name}
                     </SelectItem>
@@ -725,81 +762,149 @@ export default function ClassesPage() {
       <motion.div
         initial={{ opacity: 0, y: 10 }}
         animate={{ opacity: 1, y: 0 }}
-        className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between rounded-xl border border-border bg-card p-4"
+        className="flex flex-col gap-4 rounded-xl border border-border bg-card p-4"
       >
-        <div className="flex flex-wrap items-center gap-2 sm:gap-4">
-          <div className="flex items-center gap-2">
-            <Button
-              variant="outline"
-              size="icon"
-              onClick={() => setCurrentDate(subWeeks(currentDate, 1))}
-            >
-              <ChevronLeft className="h-4 w-4" />
-            </Button>
-            <Button
-              variant="outline"
-              size="icon"
-              onClick={() => setCurrentDate(addWeeks(currentDate, 1))}
-            >
-              <ChevronRight className="h-4 w-4" />
-            </Button>
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+          <div className="flex flex-wrap gap-2">
+            {(
+              [
+                { value: 'all', label: 'Todas' },
+                { value: 'today', label: 'Hoy' },
+                { value: 'pending', label: 'Pendientes' },
+                { value: 'unpaid', label: 'Por cobrar' },
+              ] as const
+            ).map((filter) => (
+              <Button
+                key={filter.value}
+                variant={quickFilter === filter.value ? 'default' : 'outline'}
+                size="sm"
+                onClick={() => setQuickFilter(filter.value)}
+              >
+                {filter.label}
+              </Button>
+            ))}
           </div>
-          <div>
-            <h2 className="text-sm font-semibold sm:text-base">
-              {formatDate(weekStart, "d 'de' MMMM")} -{' '}
-              {formatDate(addDays(weekStart, 6), "d 'de' MMMM, yyyy")}
-            </h2>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="inline-flex rounded-lg border border-border p-0.5">
+              <Button
+                variant={viewMode === 'list' ? 'secondary' : 'ghost'}
+                size="icon"
+                className="h-8 w-8"
+                onClick={() => setViewMode('list')}
+                title="Vista lista"
+              >
+                <LayoutList className="h-4 w-4" />
+              </Button>
+              <Button
+                variant={viewMode === 'week' ? 'secondary' : 'ghost'}
+                size="icon"
+                className="h-8 w-8"
+                onClick={() => setViewMode('week')}
+                title="Vista calendario"
+              >
+                <CalendarDays className="h-4 w-4" />
+              </Button>
+              <Button
+                variant={viewMode === 'board' ? 'secondary' : 'ghost'}
+                size="icon"
+                className="h-8 w-8"
+                onClick={() => setViewMode('board')}
+                title="Vista tablero"
+              >
+                <LayoutGrid className="h-4 w-4" />
+              </Button>
+            </div>
           </div>
-          <Button variant="ghost" size="sm" onClick={() => setCurrentDate(new Date())}>
-            Hoy
-          </Button>
         </div>
 
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-          <Label className="text-sm shrink-0">Filtrar:</Label>
-          <Select value={filterTeacher} onValueChange={setFilterTeacher}>
-            <SelectTrigger className="w-full sm:w-56">
-              <SelectValue placeholder="Todos" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">Todas las clases</SelectItem>
-              <SelectItem value="unassigned">
-                Sin profesor{unassignedCount ? ` (${unassignedCount})` : ''}
-              </SelectItem>
-              <SelectItem value="one_off">Solo clases únicas</SelectItem>
-              {teachers.map((teacher) => (
-                <SelectItem key={teacher.id} value={teacher.id}>
-                  {teacher.name}
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          {viewMode === 'week' ? (
+            <div className="flex flex-wrap items-center gap-2 sm:gap-4">
+              <div className="flex items-center gap-2">
+                <Button variant="outline" size="icon" onClick={goPrev}>
+                  <ChevronLeft className="h-4 w-4" />
+                </Button>
+                <Button variant="outline" size="icon" onClick={goNext}>
+                  <ChevronRight className="h-4 w-4" />
+                </Button>
+              </div>
+              <div>
+                <h2 className="text-sm font-semibold sm:text-base">
+                  {formatDate(weekStart, "d 'de' MMMM")} -{' '}
+                  {formatDate(addDays(weekStart, 6), "d 'de' MMMM, yyyy")}
+                </h2>
+              </div>
+              <Button variant="ghost" size="sm" onClick={() => setCurrentDate(new Date())}>
+                Hoy
+              </Button>
+            </div>
+          ) : viewMode === 'board' ? (
+            <p className="text-sm text-muted-foreground">
+              Clases organizadas por estado
+            </p>
+          ) : (
+            <p className="text-sm text-muted-foreground">
+              Listado de clases con estado y pago
+            </p>
+          )}
+
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+            <Label className="text-sm shrink-0">Profesor:</Label>
+            <Select value={filterTeacher} onValueChange={setFilterTeacher}>
+              <SelectTrigger className="w-full sm:w-56">
+                <SelectValue placeholder="Todos" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Todas las clases</SelectItem>
+                <SelectItem value="unassigned">
+                  Sin profesor{unassignedCount ? ` (${unassignedCount})` : ''}
                 </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+                <SelectItem value="one_off">Solo clases únicas</SelectItem>
+                {teachers.map((teacher) => (
+                  <SelectItem key={teacher.id} value={teacher.id}>
+                    {teacher.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
         </div>
       </motion.div>
 
-      <div className="flex flex-wrap gap-4 text-sm">
-        <div className="flex items-center gap-2">
-          <div className="h-3 w-3 rounded bg-emerald-600/50" />
-          <span>Pagada al profesor</span>
+      {viewMode === 'week' && (
+        <div className="flex flex-wrap gap-4 text-sm">
+          <div className="flex items-center gap-2">
+            <div className="h-3 w-3 rounded bg-emerald-600/50" />
+            <span>Pagada al profesor</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="h-3 w-3 rounded bg-blue-500/30" />
+            <span>Agendada</span>
+          </div>
         </div>
-        <div className="flex items-center gap-2">
-          <div className="h-3 w-3 rounded bg-blue-500/30" />
-          <span>Disponible</span>
-        </div>
-        <div className="flex items-center gap-2">
-          <div className="h-3 w-3 rounded bg-yellow-500/30" />
-          <span>Casi lleno</span>
-        </div>
-        <div className="flex items-center gap-2">
-          <div className="h-3 w-3 rounded bg-red-500/30" />
-          <span>Lleno</span>
-        </div>
-      </div>
+      )}
 
-      {filteredSessions.length === 0 && (
+      {filteredSessions.length === 0 && viewMode === 'week' && (
         <NoClasses onAdd={openCreate} />
       )}
 
+      {viewMode === 'list' && (
+        <ClassesListView
+          sessions={filteredSessions}
+          students={students}
+          onSelect={setSelectedClass}
+        />
+      )}
+
+      {viewMode === 'board' && (
+        <ClassesBoardView
+          sessions={filteredSessions}
+          onSelect={setSelectedClass}
+        />
+      )}
+
+      {viewMode === 'week' && (
       <motion.div
         initial={{ opacity: 0, y: 10 }}
         animate={{ opacity: 1, y: 0 }}
@@ -870,9 +975,6 @@ export default function ClassesPage() {
                               {session.address || 'Domicilio · sin dirección'}
                             </p>
                           )}
-                          <p className="mt-1">
-                            {session.enrolled}/{session.capacity}
-                          </p>
                         </motion.button>
                       ))}
                     </div>
@@ -883,6 +985,7 @@ export default function ClassesPage() {
           </div>
         </div>
       </motion.div>
+      )}
 
       <AnimatePresence>
         {selectedClass && (
@@ -921,10 +1024,8 @@ export default function ClassesPage() {
                     <Users className="h-5 w-5 text-accent" />
                   </div>
                   <div>
-                    <p className="text-sm text-muted-foreground">Capacidad</p>
-                    <p className="font-medium">
-                      {selectedClass.enrolled} de {selectedClass.capacity} alumnos
-                    </p>
+                    <p className="text-sm text-muted-foreground">Alumnos inscritos</p>
+                    <p className="font-medium">{selectedClass.enrolled}</p>
                   </div>
                 </div>
                 <div className="flex items-center gap-3">
@@ -1007,29 +1108,42 @@ export default function ClassesPage() {
                       Pagado
                     </Button>
                   )}
-                <Button
-                  variant="outline"
-                  className="w-full sm:w-auto"
-                  onClick={() => openReschedule(selectedClass)}
-                >
-                  Reagendar
-                </Button>
-                {selectedClass.status === 'scheduled' && (
+                {!selectedClass.teacherPaidAt && (
+                  <>
+                    <Button
+                      variant="outline"
+                      className="w-full sm:w-auto"
+                      onClick={() => openReschedule(selectedClass)}
+                    >
+                      Reagendar
+                    </Button>
+                    {selectedClass.status === 'scheduled' && (
+                      <Button
+                        variant="destructive"
+                        className="w-full sm:w-auto"
+                        onClick={() => handleCancelClass(selectedClass)}
+                      >
+                        Cancelar Clase
+                      </Button>
+                    )}
+                    <Button
+                      variant="outline"
+                      className="w-full sm:w-auto text-destructive"
+                      onClick={() => handleDeleteClass(selectedClass)}
+                    >
+                      Eliminar
+                    </Button>
+                  </>
+                )}
+                {selectedClass.teacherPaidAt && (
                   <Button
-                    variant="destructive"
+                    variant="outline"
                     className="w-full sm:w-auto"
-                    onClick={() => handleCancelClass(selectedClass)}
+                    onClick={() => setSelectedClass(null)}
                   >
-                    Cancelar Clase
+                    Cerrar
                   </Button>
                 )}
-                <Button
-                  variant="outline"
-                  className="w-full sm:w-auto text-destructive"
-                  onClick={() => handleDeleteClass(selectedClass)}
-                >
-                  Eliminar
-                </Button>
               </DialogFooter>
             </DialogContent>
           </Dialog>

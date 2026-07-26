@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { BrandLogo } from './brand-logo'
 import { SidebarNav } from './sidebar-nav'
 import type { UserRole } from '@/types'
 
@@ -30,16 +31,14 @@ export function Sidebar({ role }: SidebarProps) {
               exit={{ opacity: 0 }}
               className="flex items-center gap-2"
             >
-              <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary">
-                <span className="text-lg font-bold text-primary-foreground">AK</span>
-              </div>
+              <BrandLogo size={36} />
               <span className="text-lg font-semibold">Athletic Kids</span>
             </motion.div>
           )}
         </AnimatePresence>
         {collapsed && (
-          <div className="mx-auto flex h-9 w-9 items-center justify-center rounded-xl bg-primary">
-            <span className="text-lg font-bold text-primary-foreground">AK</span>
+          <div className="mx-auto">
+            <BrandLogo size={36} />
           </div>
         )}
       </div>

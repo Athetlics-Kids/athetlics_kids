@@ -119,6 +119,8 @@
     enrolled_at date not null default current_date,
     progress integer not null default 0 check (progress between 0 and 100),
     level text not null default 'Principiante',
+    address text,
+    is_active boolean not null default true,
     created_at timestamptz not null default now(),
     updated_at timestamptz not null default now(),
     constraint students_id_parent_id_unique unique (id, parent_id)
@@ -326,6 +328,8 @@
     s.enrolled_at,
     s.progress,
     s.level,
+    s.address,
+    s.is_active,
     s.created_at,
     s.updated_at
   from public.students s

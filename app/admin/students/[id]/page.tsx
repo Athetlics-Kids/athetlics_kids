@@ -57,7 +57,7 @@ export default function StudentDetailPage({ params }: { params: Promise<{ id: st
     if (!student) return
     if (
       !confirm(
-        `¿Eliminar TODAS las clases de ${student.name}?\nPodrás volver a agendarlas desde Pagos.`
+        `¿Eliminar las clases de ${student.name} que aún no están pagadas al profesor?\nLas ya pagadas se conservan.`
       )
     ) {
       return
@@ -67,11 +67,20 @@ export default function StudentDetailPage({ params }: { params: Promise<{ id: st
       toast.error(result.error)
       return
     }
-    toast.success(
-      result.data.count === 0
-        ? 'No había clases para eliminar'
-        : `Se eliminaron ${result.data.count} clase(s)`
-    )
+    const kept = result.data.keptPaid
+    if (result.data.count === 0 && kept === 0) {
+      toast.success('No había clases para eliminar')
+    } else if (result.data.count === 0 && kept > 0) {
+      toast.success(
+        `No se eliminó ninguna: ${kept} clase(s) ya pagada(s) al profesor se conservaron`
+      )
+    } else {
+      toast.success(
+        kept > 0
+          ? `Se eliminaron ${result.data.count} clase(s). Se conservaron ${kept} pagada(s) al profesor.`
+          : `Se eliminaron ${result.data.count} clase(s)`
+      )
+    }
     refetchClasses()
   }
 

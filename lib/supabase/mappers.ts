@@ -45,6 +45,8 @@ export function mapStudent(row: Record<string, unknown>): Student {
     progress: row.progress as number,
     level: row.level as string,
     address: (row.address as string) || undefined,
+    isActive: row.is_active !== false,
+    hasPayments: false,
   }
 }
 
@@ -74,6 +76,7 @@ export function mapTeacher(
     earningsActual: Number(row.earnings_actual ?? 0),
     pendingBalance: Number(row.pending_balance ?? row.earnings_actual ?? 0),
     isActive: row.is_active as boolean,
+    canHardDelete: true,
     createdAt: new Date(row.created_at as string),
   }
 }

@@ -81,13 +81,69 @@ export async function updateTeacher(
   return { ok: true, data: undefined }
 }
 
-export async function deleteTeacher(
+/** Inactiva el profesor (soft-delete). Conserva clases, alumnos y pagos. */
+export async function deactivateTeacher(
   supabase: SupabaseClient,
   id: string
 ): Promise<MutationResult> {
-  const { error } = await supabase.from('teachers').delete().eq('id', id)
+  const { error } = await supabase
+    .from('teachers')
+    .update({ is_active: false })
+    .eq('id', id)
   if (error) return fail(error)
   return { ok: true, data: undefined }
+}
+
+export async function reactivateTeacher(
+  supabase: SupabaseClient,
+  id: string
+): Promise<MutationResult> {
+  const { error } = await supabase
+    .from('teachers')
+    .update({ is_active: true })
+    .eq('id', id)
+  if (error) return fail(error)
+  return { ok: true, data: undefined }
+}
+
+/**
+ * Elimina profesor solo si no tiene clases, alumnos ni pagos registrados.
+ * Si tiene historial → solo se puede inactivar.
+ */
+export async function deleteTeacher(
+  supabase: SupabaseClient,
+  id: string
+): Promise<MutationResult<{ mode: 'deleted' | 'deactivated' }>> {
+  const [{ count: classCount }, { count: studentCount }, { count: payoutCount }] =
+    await Promise.all([
+      supabase
+        .from('class_sessions')
+        .select('id', { count: 'exact', head: true })
+        .eq('teacher_id', id),
+      supabase
+        .from('students')
+        .select('id', { count: 'exact', head: true })
+        .eq('teacher_id', id),
+      supabase
+        .from('teacher_payouts')
+        .select('id', { count: 'exact', head: true })
+        .eq('teacher_id', id),
+    ])
+
+  const hasHistory =
+    (classCount ?? 0) > 0 || (studentCount ?? 0) > 0 || (payoutCount ?? 0) > 0
+
+  if (hasHistory) {
+    const result = await deactivateTeacher(supabase, id)
+    if (!result.ok) return result
+    return { ok: true, data: { mode: 'deactivated' } }
+  }
+
+  await supabase.from('teacher_schedules').delete().eq('teacher_id', id)
+
+  const { error } = await supabase.from('teachers').delete().eq('id', id)
+  if (error) return fail(error)
+  return { ok: true, data: { mode: 'deleted' } }
 }
 
 // ─── Parents ────────────────────────────────────────────────────────────────
@@ -166,6 +222,7 @@ export async function createStudent(
       address: input.address?.trim() || null,
       payment_status: input.paymentStatus ?? 'pending',
       progress: input.progress ?? 0,
+      is_active: true,
     })
     .select('id')
     .single()
@@ -259,7 +316,10 @@ export async function ensurePendingPaymentsForStudents(
   supabase: SupabaseClient
 ): Promise<{ created: number }> {
   const [{ data: students }, { data: payments }] = await Promise.all([
-    supabase.from('students').select('id, parent_id, plan_type, plan_config_id'),
+    supabase
+      .from('students')
+      .select('id, parent_id, plan_type, plan_config_id')
+      .eq('is_active', true),
     supabase.from('payments').select('student_id'),
   ])
 
@@ -356,16 +416,222 @@ export async function updateStudent(
   return { ok: true, data: undefined }
 }
 
-export async function deleteStudent(
+/** Inactiva el alumno (soft-delete). Conserva pagos e historial. */
+export async function deactivateStudent(
   supabase: SupabaseClient,
   id: string
 ): Promise<MutationResult> {
+  const { error } = await supabase
+    .from('students')
+    .update({ is_active: false })
+    .eq('id', id)
+  if (error) return fail(error)
+  return { ok: true, data: undefined }
+}
+
+/**
+ * Elimina alumno solo si nunca tuvo pagos.
+ * Si tiene (o tuvo) pagos → solo se puede inactivar.
+ */
+export async function deleteStudent(
+  supabase: SupabaseClient,
+  id: string
+): Promise<MutationResult<{ mode: 'deleted' | 'deactivated' }>> {
+  const { count, error: countError } = await supabase
+    .from('payments')
+    .select('id', { count: 'exact', head: true })
+    .eq('student_id', id)
+
+  if (countError) return fail(countError)
+
+  if ((count ?? 0) > 0) {
+    const result = await deactivateStudent(supabase, id)
+    if (!result.ok) return result
+    return { ok: true, data: { mode: 'deactivated' } }
+  }
+
+  const classesResult = await deleteAllStudentClasses(supabase, id)
+  if (!classesResult.ok) return classesResult
+
+  const { error: enrollError } = await supabase
+    .from('class_enrollments')
+    .delete()
+    .eq('student_id', id)
+  if (enrollError) return fail(enrollError)
+
+  const { error: attendanceError } = await supabase
+    .from('attendance_records')
+    .delete()
+    .eq('student_id', id)
+  if (attendanceError) return fail(attendanceError)
+
   const { error } = await supabase.from('students').delete().eq('id', id)
+  if (error) return fail(error)
+  return { ok: true, data: { mode: 'deleted' } }
+}
+
+export async function reactivateStudent(
+  supabase: SupabaseClient,
+  id: string
+): Promise<MutationResult> {
+  const { error } = await supabase
+    .from('students')
+    .update({ is_active: true })
+    .eq('id', id)
   if (error) return fail(error)
   return { ok: true, data: undefined }
 }
 
 // ─── Classes ────────────────────────────────────────────────────────────────
+
+/** Clases incluidas según tipo de plan (misma lógica que generateClassesFromPayment). */
+export function classesAllowedForPlan(
+  planType: string,
+  classesPerWeek: number,
+  durationMonths: number
+): number {
+  if (planType === 'one_off') return 1
+  return Math.max(1, classesPerWeek) * 4 * Math.max(1, durationMonths)
+}
+
+export async function getStudentClassQuota(
+  supabase: SupabaseClient,
+  studentId: string
+): Promise<
+  MutationResult<{ entitled: number; used: number; remaining: number }>
+> {
+  const [{ data: payments, error: payErr }, { data: student }] = await Promise.all([
+    supabase
+      .from('payments')
+      .select('id, status, plan_type')
+      .eq('student_id', studentId)
+      .eq('status', 'paid'),
+    supabase
+      .from('students')
+      .select('plan_config_id, plan_type')
+      .eq('id', studentId)
+      .maybeSingle(),
+  ])
+
+  if (payErr) return fail(payErr)
+
+  const { data: plans } = await supabase
+    .from('plan_configs')
+    .select('id, plan_type, classes_per_week, duration_months')
+    .eq('is_active', true)
+    .order('sort_order')
+
+  let entitled = 0
+  for (const payment of payments ?? []) {
+    const planType = String(payment.plan_type)
+    let classesPerWeek = 1
+    let durationMonths = 1
+
+    const studentPlan =
+      student?.plan_config_id &&
+      (plans ?? []).find(
+        (p) =>
+          p.id === student.plan_config_id && String(p.plan_type) === planType
+      )
+    const byType = (plans ?? []).find((p) => String(p.plan_type) === planType)
+    const plan = studentPlan || byType
+
+    if (plan) {
+      classesPerWeek = Number(plan.classes_per_week ?? 1)
+      durationMonths = Number(plan.duration_months ?? 1)
+    } else if (planType === 'one_off') {
+      classesPerWeek = 1
+      durationMonths = 1
+    }
+
+    entitled += classesAllowedForPlan(planType, classesPerWeek, durationMonths)
+  }
+
+  const { count: ownedCount, error: ownedErr } = await supabase
+    .from('class_sessions')
+    .select('id', { count: 'exact', head: true })
+    .eq('student_id', studentId)
+    .neq('status', 'cancelled')
+
+  if (ownedErr) return fail(ownedErr)
+
+  // También contar cupos en clases grupales donde esté inscrito pero no sea owner
+  const { data: enrollments, error: enrErr } = await supabase
+    .from('class_enrollments')
+    .select('class_session_id')
+    .eq('student_id', studentId)
+
+  if (enrErr) return fail(enrErr)
+
+  const enrolledIds = [...new Set((enrollments ?? []).map((e) => e.class_session_id))]
+  let enrolledExtra = 0
+  if (enrolledIds.length) {
+    const { data: sessions, error: sessErr } = await supabase
+      .from('class_sessions')
+      .select('id, student_id, status')
+      .in('id', enrolledIds)
+      .neq('status', 'cancelled')
+
+    if (sessErr) return fail(sessErr)
+    enrolledExtra = (sessions ?? []).filter(
+      (s) => s.student_id !== studentId
+    ).length
+  }
+
+  const used = (ownedCount ?? 0) + enrolledExtra
+  const remaining = Math.max(0, entitled - used)
+
+  return {
+    ok: true,
+    data: { entitled, used, remaining },
+  }
+}
+
+/** El alumno debe haber pagado, no estar vencido, y aún tener cupo de clases del plan. */
+export async function ensureStudentCanScheduleClasses(
+  supabase: SupabaseClient,
+  studentId: string,
+  classesToCreate = 1
+): Promise<MutationResult> {
+  const { data: payments, error } = await supabase
+    .from('payments')
+    .select('id, status')
+    .eq('student_id', studentId)
+
+  if (error) return fail(error)
+
+  const list = payments ?? []
+  if (list.some((p) => p.status === 'overdue')) {
+    return fail(
+      new Error(
+        'El alumno tiene pagos vencidos. Registra el pago antes de agendar clases.'
+      )
+    )
+  }
+
+  if (!list.some((p) => p.status === 'paid')) {
+    return fail(
+      new Error(
+        'El alumno no tiene un pago registrado. Márcalo como pagado antes de agendar clases.'
+      )
+    )
+  }
+
+  const quota = await getStudentClassQuota(supabase, studentId)
+  if (!quota.ok) return quota
+
+  if (quota.data.remaining < classesToCreate) {
+    return fail(
+      new Error(
+        quota.data.entitled === 0
+          ? 'El alumno no tiene clases incluidas en sus pagos.'
+          : `Ya usó ${quota.data.used} de ${quota.data.entitled} clase(s) pagadas. No puede agendar más hasta un nuevo pago.`
+      )
+    )
+  }
+
+  return { ok: true, data: undefined }
+}
 
 export type ClassInput = {
   title: string
@@ -388,6 +654,23 @@ export async function createClassSession(
   supabase: SupabaseClient,
   input: ClassInput
 ): Promise<MutationResult<{ id: string }>> {
+  if (input.studentId) {
+    const canSchedule = await ensureStudentCanScheduleClasses(
+      supabase,
+      input.studentId
+    )
+    if (!canSchedule.ok) return canSchedule
+  }
+
+  if (input.teacherId) {
+    const slot = await ensureTeacherSlotAvailable(supabase, {
+      teacherId: input.teacherId,
+      classDate: input.classDate,
+      startTime: input.startTime,
+    })
+    if (!slot.ok) return slot
+  }
+
   let teacherFee = input.teacherFee
   const locationType = input.locationType ?? 'local'
 
@@ -439,6 +722,42 @@ export async function updateClassSession(
   id: string,
   input: Partial<ClassInput>
 ): Promise<MutationResult> {
+  const { data: existing, error: existingErr } = await supabase
+    .from('class_sessions')
+    .select('id, teacher_paid_at, teacher_id, class_date, start_time')
+    .eq('id', id)
+    .maybeSingle()
+  if (existingErr) return fail(existingErr)
+  if (existing?.teacher_paid_at) {
+    return fail(
+      new Error(
+        'Esta clase ya fue pagada al profesor y no se puede modificar, cancelar ni reagendar.'
+      )
+    )
+  }
+
+  const nextTeacherId =
+    input.teacherId !== undefined ? input.teacherId || null : existing?.teacher_id
+  const nextDate =
+    input.classDate !== undefined
+      ? input.classDate
+      : String(existing?.class_date ?? '').slice(0, 10)
+  const rawStart =
+    input.startTime !== undefined
+      ? input.startTime
+      : String(existing?.start_time ?? '')
+  const nextStart = rawStart.slice(0, 5)
+
+  if (nextTeacherId && nextDate && nextStart) {
+    const slot = await ensureTeacherSlotAvailable(supabase, {
+      teacherId: nextTeacherId,
+      classDate: nextDate,
+      startTime: nextStart,
+      excludeClassId: id,
+    })
+    if (!slot.ok) return slot
+  }
+
   const payload: Record<string, unknown> = {}
   if (input.title !== undefined) payload.title = input.title.trim()
   if (input.teacherId !== undefined) {
@@ -491,6 +810,20 @@ export async function deleteClassSession(
   supabase: SupabaseClient,
   id: string
 ): Promise<MutationResult> {
+  const { data: existing, error: existingErr } = await supabase
+    .from('class_sessions')
+    .select('id, teacher_paid_at')
+    .eq('id', id)
+    .maybeSingle()
+  if (existingErr) return fail(existingErr)
+  if (existing?.teacher_paid_at) {
+    return fail(
+      new Error(
+        'Esta clase ya fue pagada al profesor y no se puede eliminar.'
+      )
+    )
+  }
+
   const { error } = await supabase.from('class_sessions').delete().eq('id', id)
   if (error) return fail(error)
   return { ok: true, data: undefined }
@@ -522,8 +855,8 @@ export async function markTeacherClassPaid(
   const today = new Date()
   const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`
   const classDate = String(session.class_date).slice(0, 10)
-  if (classDate >= todayStr) {
-    return fail(new Error('Solo se puede pagar cuando la fecha de la clase ya pasó'))
+  if (classDate > todayStr) {
+    return fail(new Error('Solo se puede pagar el día de la clase o después'))
   }
 
   const amount = Number(session.teacher_fee ?? 0)
@@ -555,23 +888,30 @@ export async function markTeacherClassPaid(
   return { ok: true, data: { amount } }
 }
 
-/** Elimina todas las clases de un alumno (sesiones individuales) y sus cupos.
- * En clases grupales solo quita la inscripción del alumno.
- * También desmarca classes_generated en pagos para poder re-agendar.
+/** Elimina clases no pagadas al profesor del alumno.
+ * Conserva las que ya tienen teacher_paid_at.
+ * En clases grupales solo quita la inscripción si la sesión no está pagada.
  */
 export async function deleteAllStudentClasses(
   supabase: SupabaseClient,
   studentId: string
-): Promise<MutationResult<{ count: number }>> {
+): Promise<MutationResult<{ count: number; keptPaid: number }>> {
   const toDelete = new Set<string>()
+  let keptPaid = 0
 
   const { data: owned, error: ownedErr } = await supabase
     .from('class_sessions')
-    .select('id')
+    .select('id, teacher_paid_at')
     .eq('student_id', studentId)
 
   if (ownedErr) return fail(ownedErr)
-  for (const row of owned ?? []) toDelete.add(row.id)
+  for (const row of owned ?? []) {
+    if (row.teacher_paid_at) {
+      keptPaid += 1
+    } else {
+      toDelete.add(row.id)
+    }
+  }
 
   const { data: enrollments, error: enrErr } = await supabase
     .from('class_enrollments')
@@ -586,12 +926,16 @@ export async function deleteAllStudentClasses(
   if (remaining.length) {
     const { data: sessions, error: sessErr } = await supabase
       .from('class_sessions')
-      .select('id, capacity')
+      .select('id, capacity, teacher_paid_at, student_id')
       .in('id', remaining)
 
     if (sessErr) return fail(sessErr)
 
     for (const session of sessions ?? []) {
+      if (session.teacher_paid_at) {
+        if (session.student_id !== studentId) keptPaid += 1
+        continue
+      }
       if (Number(session.capacity) <= 1) {
         toDelete.add(session.id)
       } else {
@@ -624,7 +968,49 @@ export async function deleteAllStudentClasses(
     .eq('student_id', studentId)
     .eq('classes_generated', true)
 
-  return { ok: true, data: { count: sessionIds.length } }
+  return { ok: true, data: { count: sessionIds.length, keptPaid } }
+}
+
+/** Evita que un profesor tenga dos clases en la misma fecha y hora. */
+export async function ensureTeacherSlotAvailable(
+  supabase: SupabaseClient,
+  input: {
+    teacherId: string
+    classDate: string
+    startTime: string
+    excludeClassId?: string
+  }
+): Promise<MutationResult> {
+  const wantTime = input.startTime.slice(0, 5)
+
+  let query = supabase
+    .from('class_sessions')
+    .select('id, title, start_time')
+    .eq('teacher_id', input.teacherId)
+    .eq('class_date', input.classDate)
+    .neq('status', 'cancelled')
+
+  if (input.excludeClassId) {
+    query = query.neq('id', input.excludeClassId)
+  }
+
+  const { data, error } = await query
+  if (error) return fail(error)
+
+  const conflict = (data ?? []).find(
+    (row) => String(row.start_time).slice(0, 5) === wantTime
+  )
+
+  if (conflict) {
+    const title = conflict.title ? ` (${conflict.title})` : ''
+    return fail(
+      new Error(
+        `El profesor ya tiene una clase el ${input.classDate} a las ${wantTime}${title}. Elige otra hora o fecha.`
+      )
+    )
+  }
+
+  return { ok: true, data: undefined }
 }
 
 // ─── Payments ───────────────────────────────────────────────────────────────
@@ -779,6 +1165,9 @@ export async function generateClassesFromPayment(
     .maybeSingle()
 
   if (payErr || !payment) return fail(payErr || new Error('Pago no encontrado'))
+  if (payment.status !== 'paid') {
+    return fail(new Error('Solo se pueden agendar clases de un pago ya marcado como pagado'))
+  }
   if (payment.classes_generated) {
     return fail(new Error('Este pago ya tiene clases generadas'))
   }
@@ -827,6 +1216,27 @@ export async function generateClassesFromPayment(
     classesPerWeek = 1
   }
 
+  const allowance = classesAllowedForPlan(planType, classesPerWeek, durationMonths)
+
+  // Clases ya ligadas a este pago (no canceladas)
+  const { count: alreadyForPayment, error: cntErr } = await supabase
+    .from('class_sessions')
+    .select('id', { count: 'exact', head: true })
+    .eq('payment_id', input.paymentId)
+    .neq('status', 'cancelled')
+  if (cntErr) return fail(cntErr)
+
+  const remainingForPayment = Math.max(0, allowance - (alreadyForPayment ?? 0))
+  if (remainingForPayment <= 0) {
+    return fail(
+      new Error(
+        isOneOff
+          ? 'Esta clase única ya tiene su clase agendada.'
+          : `Este pago ya tiene las ${allowance} clase(s) incluidas.`
+      )
+    )
+  }
+
   if (input.weekdays.length !== classesPerWeek) {
     return fail(
       new Error(
@@ -857,6 +1267,21 @@ export async function generateClassesFromPayment(
     dates.length = 1
   }
 
+  // No generar más de lo que queda en el pago / cupo del alumno
+  const quota = await getStudentClassQuota(supabase, student.id)
+  if (!quota.ok) return quota
+  const maxCreate = Math.min(remainingForPayment, quota.data.remaining, dates.length)
+  if (maxCreate <= 0) {
+    return fail(
+      new Error(
+        `No quedan clases disponibles (${quota.data.used}/${quota.data.entitled} usadas).`
+      )
+    )
+  }
+  if (dates.length > maxCreate) {
+    dates.length = maxCreate
+  }
+
   const teacherId = input.teacherId !== undefined ? input.teacherId : student.teacher_id
   const locationType = input.locationType ?? 'local'
   const address =
@@ -881,6 +1306,17 @@ export async function generateClassesFromPayment(
   const endTime = addHoursToTime(startTime)
   const planStart = toISODateLocal(start)
   const planEnd = dates[dates.length - 1]
+
+  if (teacherId) {
+    for (const classDate of dates) {
+      const slot = await ensureTeacherSlotAvailable(supabase, {
+        teacherId: String(teacherId),
+        classDate,
+        startTime,
+      })
+      if (!slot.ok) return slot
+    }
+  }
 
   const rows = dates.map((classDate) => ({
     title: isOneOff ? `${student.name} · clase única` : `${student.name} · plan`,
@@ -920,7 +1356,8 @@ export async function generateClassesFromPayment(
   await supabase
     .from('payments')
     .update({
-      classes_generated: true,
+      classes_generated:
+        (alreadyForPayment ?? 0) + (created?.length ?? 0) >= allowance,
       plan_start_date: planStart,
       plan_end_date: planEnd,
     })
@@ -959,6 +1396,9 @@ export async function createOneOffClass(
     .maybeSingle()
 
   if (!student) return fail(new Error('Alumno no encontrado'))
+
+  const canSchedule = await ensureStudentCanScheduleClasses(supabase, input.studentId)
+  if (!canSchedule.ok) return canSchedule
 
   const teacherId = input.teacherId !== undefined ? input.teacherId : student.teacher_id
   const locationType = input.locationType ?? 'local'

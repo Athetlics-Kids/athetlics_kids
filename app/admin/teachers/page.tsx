@@ -11,6 +11,8 @@ import {
   Users,
   Edit,
   Trash2,
+  UserX,
+  UserCheck,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -39,7 +41,7 @@ import { Switch } from '@/components/ui/switch'
 import { StatusBadge } from '@/components/dashboard'
 import { useSupabaseLoader } from '@/hooks/use-async-data'
 import { fetchTeachers } from '@/lib/supabase/data'
-import { createTeacher, deleteTeacher, updateTeacher } from '@/lib/supabase/mutations'
+import { createTeacher, deactivateTeacher, deleteTeacher, reactivateTeacher, updateTeacher } from '@/lib/supabase/mutations'
 import { createClient } from '@/lib/supabase/client'
 import { formatCurrency, PHONE_PLACEHOLDER } from '@/lib/locale'
 import type { Teacher } from '@/types'
@@ -120,14 +122,51 @@ export default function TeachersPage() {
     refetch()
   }
 
-  const handleDelete = async (teacher: Teacher) => {
-    if (!confirm(`¿Eliminar a ${teacher.name}?`)) return
+  const handleDeactivate = async (teacher: Teacher) => {
+    if (
+      !confirm(
+        `¿Inactivar a ${teacher.name}?\nNo se borrarán sus clases, alumnos ni pagos; solo dejará de aparecer como activo.`
+      )
+    ) {
+      return
+    }
+    const result = await deactivateTeacher(createClient(), teacher.id)
+    if (!result.ok) {
+      toast.error(result.error)
+      return
+    }
+    toast.success('Profesor inactivado')
+    refetch()
+  }
+
+  const handleHardDelete = async (teacher: Teacher) => {
+    if (
+      !confirm(
+        `¿Eliminar definitivamente a ${teacher.name}?\nSolo es posible porque no tiene clases, alumnos ni pagos registrados.`
+      )
+    ) {
+      return
+    }
     const result = await deleteTeacher(createClient(), teacher.id)
     if (!result.ok) {
       toast.error(result.error)
       return
     }
-    toast.success('Profesor eliminado')
+    toast.success(
+      result.data.mode === 'deactivated'
+        ? 'El profesor tenía historial: se inactivó para conservar la trazabilidad'
+        : 'Profesor eliminado'
+    )
+    refetch()
+  }
+
+  const handleReactivate = async (teacher: Teacher) => {
+    const result = await reactivateTeacher(createClient(), teacher.id)
+    if (!result.ok) {
+      toast.error(result.error)
+      return
+    }
+    toast.success('Profesor reactivado')
     refetch()
   }
 
@@ -279,13 +318,30 @@ export default function TeachersPage() {
                         Editar
                       </DropdownMenuItem>
                       <DropdownMenuSeparator />
-                      <DropdownMenuItem
-                        className="text-destructive"
-                        onClick={() => handleDelete(teacher)}
-                      >
-                        <Trash2 className="mr-2 h-4 w-4" />
-                        Eliminar
-                      </DropdownMenuItem>
+                      {teacher.isActive ? (
+                        teacher.canHardDelete ? (
+                          <DropdownMenuItem
+                            className="text-destructive"
+                            onClick={() => handleHardDelete(teacher)}
+                          >
+                            <Trash2 className="mr-2 h-4 w-4" />
+                            Eliminar
+                          </DropdownMenuItem>
+                        ) : (
+                          <DropdownMenuItem
+                            className="text-destructive"
+                            onClick={() => handleDeactivate(teacher)}
+                          >
+                            <UserX className="mr-2 h-4 w-4" />
+                            Inactivar
+                          </DropdownMenuItem>
+                        )
+                      ) : (
+                        <DropdownMenuItem onClick={() => handleReactivate(teacher)}>
+                          <UserCheck className="mr-2 h-4 w-4" />
+                          Reactivar
+                        </DropdownMenuItem>
+                      )}
                     </DropdownMenuContent>
                   </DropdownMenu>
                 </div>

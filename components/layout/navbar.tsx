@@ -176,14 +176,14 @@ export function Navbar({ user, onMenuClick }: NavbarProps) {
           <DropdownMenuContent align="end" className="w-56">
             <DropdownMenuLabel>Mi Cuenta</DropdownMenuLabel>
             <DropdownMenuSeparator />
-            <DropdownMenuItem>
+            {/*<DropdownMenuItem>
               <User className="mr-2 h-4 w-4" />
               <span>Perfil</span>
             </DropdownMenuItem>
             <DropdownMenuItem>
               <Settings className="mr-2 h-4 w-4" />
               <span>Configuración</span>
-            </DropdownMenuItem>
+            </DropdownMenuItem>*/}
             <DropdownMenuItem onClick={toggleTheme} className="sm:hidden">
               {isDark ? <Sun className="mr-2 h-4 w-4" /> : <Moon className="mr-2 h-4 w-4" />}
               <span>{isDark ? 'Modo claro' : 'Modo oscuro'}</span>

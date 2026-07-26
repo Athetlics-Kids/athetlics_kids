@@ -3,6 +3,7 @@
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
+import { BrandLogo } from "@/components/layout/brand-logo";
 
 export default function Home() {
   const router = useRouter();
@@ -27,11 +28,9 @@ export default function Home() {
           initial={{ y: -20 }}
           animate={{ y: 0 }}
           transition={{ duration: 0.5, delay: 0.2 }}
-          className="mb-6"
+          className="mb-6 flex justify-center"
         >
-          <div className="mx-auto flex h-24 w-24 items-center justify-center rounded-2xl bg-white shadow-2xl">
-            <span className="text-4xl font-bold text-blue-600">AK</span>
-          </div>
+          <BrandLogo size={96} priority className="shadow-2xl" />
         </motion.div>
         
         <motion.h1

@@ -5,6 +5,7 @@ import { Sidebar } from './sidebar'
 import { Navbar } from './navbar'
 import { MobileNav } from './mobile-nav'
 import { SidebarNav } from './sidebar-nav'
+import { BrandLogo } from './brand-logo'
 import {
   Sheet,
   SheetContent,
@@ -47,9 +48,7 @@ export function DashboardLayout({ children, user }: DashboardLayoutProps) {
         <SheetContent side="left" className="w-[280px] bg-sidebar p-0 text-sidebar-foreground [&>button]:text-sidebar-foreground">
           <SheetHeader className="border-b border-sidebar-border p-4 text-left">
             <SheetTitle className="flex items-center gap-2 text-sidebar-foreground">
-              <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary">
-                <span className="text-lg font-bold text-primary-foreground">AK</span>
-              </div>
+              <BrandLogo size={36} />
               Athletic Kids
             </SheetTitle>
           </SheetHeader>

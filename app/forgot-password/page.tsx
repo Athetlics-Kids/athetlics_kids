@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { createClient } from '@/lib/supabase/client'
+import { BrandLogo } from '@/components/layout/brand-logo'
 
 export default function ForgotPasswordPage() {
   const [email, setEmail] = useState('')
@@ -45,8 +46,8 @@ export default function ForgotPasswordPage() {
       >
         {/* Logo */}
         <div className="mb-8 text-center">
-          <div className="inline-flex h-14 w-14 items-center justify-center rounded-xl bg-primary mb-3">
-            <span className="text-2xl font-bold text-primary-foreground">AK</span>
+          <div className="mb-3 inline-flex">
+            <BrandLogo size={56} priority />
           </div>
           <h1 className="text-2xl font-bold">Athletic Kids</h1>
         </div>

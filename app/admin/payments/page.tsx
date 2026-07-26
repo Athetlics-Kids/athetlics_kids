@@ -630,7 +630,7 @@ export default function PaymentsPage() {
                   <SelectValue placeholder="Seleccionar alumno" />
                 </SelectTrigger>
                 <SelectContent>
-                  {students.map((student) => (
+                  {students.filter((s) => s.isActive).map((student) => (
                     <SelectItem key={student.id} value={student.id}>
                       {student.name} — {student.parentName}
                     </SelectItem>

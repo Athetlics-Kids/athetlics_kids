@@ -12,6 +12,7 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { createClient } from '@/lib/supabase/client'
 import { fetchCurrentUser } from '@/lib/supabase/data'
 import { getHomeRouteForRole } from '@/lib/supabase/auth-helpers'
+import { BrandLogo } from '@/components/layout/brand-logo'
 
 export function LoginForm() {
   const router = useRouter()
@@ -94,9 +95,7 @@ export function LoginForm() {
             className="text-center"
           >
             <div className="mb-8 flex items-center justify-center">
-              <div className="flex h-20 w-20 items-center justify-center rounded-2xl bg-white/20 backdrop-blur-sm">
-                <span className="text-4xl font-bold">AK</span>
-              </div>
+              <BrandLogo size={80} priority className="shadow-lg" />
             </div>
             <h1 className="text-4xl font-bold mb-4">Athletic Kids</h1>
             <p className="text-xl text-white/80 max-w-md">
@@ -114,8 +113,8 @@ export function LoginForm() {
           className="w-full max-w-md py-6"
         >
           <div className="lg:hidden mb-8 text-center">
-            <div className="inline-flex h-14 w-14 items-center justify-center rounded-xl bg-primary mb-3">
-              <span className="text-2xl font-bold text-primary-foreground">AK</span>
+            <div className="mb-3 inline-flex">
+              <BrandLogo size={56} priority />
             </div>
             <h1 className="text-2xl font-bold">Athletic Kids</h1>
           </div>

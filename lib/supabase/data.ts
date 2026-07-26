@@ -44,10 +44,14 @@ export async function fetchStudents(supabase: SupabaseClient): Promise<Student[]
   if (error || !data) return []
 
   const statusByStudent = derivePaymentStatusByStudent(payments ?? [])
+  const studentsWithPayments = new Set(
+    (payments ?? []).map((p) => p.student_id as string)
+  )
 
   return data.map((row) => {
     const student = mapStudent(row)
     student.paymentStatus = statusByStudent.get(student.id) ?? 'pending'
+    student.hasPayments = studentsWithPayments.has(student.id)
     return student
   })
 }
@@ -108,7 +112,14 @@ export async function fetchTeachers(supabase: SupabaseClient): Promise<Teacher[]
   const nextMonthDate = new Date(now.getFullYear(), now.getMonth() + 1, 1)
   const monthEndExclusive = `${nextMonthDate.getFullYear()}-${String(nextMonthDate.getMonth() + 1).padStart(2, '0')}-01`
 
-  const [{ data: summaries }, { data: schedules }, { data: monthFees }] = await Promise.all([
+  const [
+    { data: summaries },
+    { data: schedules },
+    { data: monthFees },
+    { data: classTeachers },
+    { data: studentTeachers },
+    { data: payoutTeachers },
+  ] = await Promise.all([
     supabase.from('teacher_summaries').select('*').order('name'),
     supabase.from('teacher_schedules').select('*'),
     supabase
@@ -118,9 +129,23 @@ export async function fetchTeachers(supabase: SupabaseClient): Promise<Teacher[]
       .not('teacher_id', 'is', null)
       .gte('class_date', monthStart)
       .lt('class_date', monthEndExclusive),
+    supabase.from('class_sessions').select('teacher_id').not('teacher_id', 'is', null),
+    supabase.from('students').select('teacher_id'),
+    supabase.from('teacher_payouts').select('teacher_id'),
   ])
 
   if (!summaries) return []
+
+  const blocked = new Set<string>()
+  for (const row of classTeachers ?? []) {
+    if (row.teacher_id) blocked.add(row.teacher_id as string)
+  }
+  for (const row of studentTeachers ?? []) {
+    if (row.teacher_id) blocked.add(row.teacher_id as string)
+  }
+  for (const row of payoutTeachers ?? []) {
+    if (row.teacher_id) blocked.add(row.teacher_id as string)
+  }
 
   const projectedByTeacher = new Map<string, number>()
   const pendingByTeacher = new Map<string, number>()
@@ -133,8 +158,8 @@ export async function fetchTeachers(supabase: SupabaseClient): Promise<Teacher[]
       row.teacher_id,
       (projectedByTeacher.get(row.teacher_id) ?? 0) + fee
     )
-    // Saldo pendiente = ejecutada (fecha pasada) y aún no pagada al profesor
-    if (dateOnly < today && !row.teacher_paid_at) {
+    // Saldo pendiente = del día de la clase en adelante (hoy o pasado) y aún no pagada
+    if (dateOnly <= today && !row.teacher_paid_at) {
       pendingByTeacher.set(
         row.teacher_id,
         (pendingByTeacher.get(row.teacher_id) ?? 0) + fee
@@ -150,6 +175,7 @@ export async function fetchTeachers(supabase: SupabaseClient): Promise<Teacher[]
     teacher.earningsActual = pending
     teacher.pendingBalance = pending
     teacher.earnings = projected
+    teacher.canHardDelete = !blocked.has(teacher.id)
     return teacher
   })
 }
@@ -200,7 +226,7 @@ export async function fetchTeacherMonthlyEarnings(
     const fee = Number(row.teacher_fee ?? 0)
     totals[i].projected += fee
     totals[i].classes += 1
-    if (dateOnly < today) {
+    if (dateOnly <= today) {
       totals[i].classesDone += 1
       if (row.teacher_paid_at) {
         totals[i].classesPaid += 1
@@ -401,6 +427,7 @@ export async function fetchStudentById(
   const student = mapStudent(data)
   const statusByStudent = derivePaymentStatusByStudent(payments ?? [])
   student.paymentStatus = statusByStudent.get(id) ?? 'pending'
+  student.hasPayments = (payments ?? []).length > 0
   return student
 }
 

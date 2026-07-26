@@ -17,7 +17,8 @@
     "db:migrate-earnings-monthly": "node scripts/run-sql.mjs supabase/migrations/20260722000002_teacher_earnings_monthly.sql",
     "db:migrate-teacher-payouts": "node scripts/run-sql.mjs supabase/migrations/20260723000000_teacher_payouts.sql",
     "db:migrate-address": "node scripts/run-sql.mjs supabase/migrations/20260723000001_student_class_address.sql",
-    "db:migrate-one-off-plan": "node scripts/run-sql.mjs supabase/migrations/20260723000002_one_off_plan.sql && node scripts/run-sql.mjs supabase/migrations/20260723000003_one_off_plan_seed.sql"
+    "db:migrate-one-off-plan": "node scripts/run-sql.mjs supabase/migrations/20260723000002_one_off_plan.sql && node scripts/run-sql.mjs supabase/migrations/20260723000003_one_off_plan_seed.sql",
+    "db:migrate-student-soft-delete": "node scripts/run-sql.mjs supabase/migrations/20260724000000_student_soft_delete.sql"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.9.1",

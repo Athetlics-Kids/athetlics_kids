@@ -3,7 +3,7 @@
 import { useMemo, useState } from 'react'
 import { motion } from 'framer-motion'
 import { ColumnDef } from '@tanstack/react-table'
-import { Plus, MoreHorizontal, Eye, Edit, Trash2, Filter, CalendarX } from 'lucide-react'
+import { Plus, MoreHorizontal, Eye, Edit, UserX, UserCheck, Trash2, Filter, CalendarX } from 'lucide-react'
 import { toast } from 'sonner'
 import Link from 'next/link'
 import { Button } from '@/components/ui/button'
@@ -37,6 +37,7 @@ import {
   DataTable,
   PaymentStatusBadge,
   PlanTypeBadge,
+  StatusBadge,
   NoStudents,
   TableRowSkeleton,
 } from '@/components/dashboard'
@@ -52,12 +53,15 @@ import {
 import {
   createParent,
   createStudent,
+  deactivateStudent,
   deleteAllStudentClasses,
   deleteStudent,
+  reactivateStudent,
   updateStudent,
 } from '@/lib/supabase/mutations'
 import { createClient } from '@/lib/supabase/client'
 import { formatPlanConfigLabel, PHONE_PLACEHOLDER } from '@/lib/locale'
+import { Checkbox } from '@/components/ui/checkbox'
 
 type StudentForm = {
   name: string
@@ -93,6 +97,7 @@ export default function StudentsPage() {
   const [form, setForm] = useState<StudentForm>(emptyForm)
   const [saving, setSaving] = useState(false)
   const [filterStatus, setFilterStatus] = useState<string>('all')
+  const [showInactive, setShowInactive] = useState(false)
 
   const { data: students = [], loading, refetch } = useSupabaseLoader((client) =>
     fetchStudents(client)
@@ -110,10 +115,16 @@ export default function StudentsPage() {
     fetchPlanConfigs(client, { activeOnly: true })
   )
 
+  const visibleStudents = showInactive
+    ? students
+    : students.filter((s) => s.isActive)
+
   const filteredStudents =
     filterStatus === 'all'
-      ? students
-      : students.filter((s) => s.paymentStatus === filterStatus)
+      ? visibleStudents
+      : visibleStudents.filter((s) => s.paymentStatus === filterStatus)
+
+  const activeStudents = students.filter((s) => s.isActive)
 
   const openCreate = () => {
     setEditing(null)
@@ -221,21 +232,58 @@ export default function StudentsPage() {
     refetchTeachers()
   }
 
-  const handleDelete = async (student: Student) => {
-    if (!confirm(`¿Eliminar a ${student.name}?`)) return
+  const handleDeactivate = async (student: Student) => {
+    if (
+      !confirm(
+        `¿Inactivar a ${student.name}?\nNo se borrarán sus pagos ni su historial; solo dejará de aparecer como alumno activo.`
+      )
+    ) {
+      return
+    }
+    const result = await deactivateStudent(createClient(), student.id)
+    if (!result.ok) {
+      toast.error(result.error)
+      return
+    }
+    toast.success('Alumno inactivado')
+    refetch()
+  }
+
+  const handleHardDelete = async (student: Student) => {
+    if (
+      !confirm(
+        `¿Eliminar definitivamente a ${student.name}?\nSolo es posible porque no tiene pagos registrados.`
+      )
+    ) {
+      return
+    }
     const result = await deleteStudent(createClient(), student.id)
     if (!result.ok) {
       toast.error(result.error)
       return
     }
-    toast.success('Alumno eliminado')
+    toast.success(
+      result.data.mode === 'deactivated'
+        ? 'El alumno tenía pagos: se inactivó para conservar la trazabilidad'
+        : 'Alumno eliminado'
+    )
+    refetch()
+  }
+
+  const handleReactivate = async (student: Student) => {
+    const result = await reactivateStudent(createClient(), student.id)
+    if (!result.ok) {
+      toast.error(result.error)
+      return
+    }
+    toast.success('Alumno reactivado')
     refetch()
   }
 
   const handleDeleteAllClasses = async (student: Student) => {
     if (
       !confirm(
-        `¿Eliminar TODAS las clases de ${student.name}?\nPodrás volver a agendarlas desde Pagos.`
+        `¿Eliminar las clases de ${student.name} que aún no están pagadas al profesor?\nLas ya pagadas se conservan.`
       )
     ) {
       return
@@ -245,11 +293,21 @@ export default function StudentsPage() {
       toast.error(result.error)
       return
     }
-    toast.success(
-      result.data.count === 0
-        ? 'No había clases para eliminar'
-        : `Se eliminaron ${result.data.count} clase(s)`
-    )
+    const kept = result.data.keptPaid
+    if (result.data.count === 0 && kept === 0) {
+      toast.success('No había clases para eliminar')
+    } else if (result.data.count === 0 && kept > 0) {
+      toast.success(
+        `No se eliminó ninguna: ${kept} clase(s) ya pagada(s) al profesor se conservaron`
+      )
+    } else {
+      toast.success(
+        kept > 0
+          ? `Se eliminaron ${result.data.count} clase(s). Se conservaron ${kept} pagada(s) al profesor.`
+          : `Se eliminaron ${result.data.count} clase(s)`
+      )
+    }
+    refetch()
   }
 
   const columns: ColumnDef<Student>[] = useMemo(
@@ -307,6 +365,11 @@ export default function StudentsPage() {
         cell: ({ row }) => <PaymentStatusBadge status={row.original.paymentStatus} />,
       },
       {
+        id: 'isActive',
+        header: 'Estado',
+        cell: ({ row }) => <StatusBadge active={row.original.isActive} />,
+      },
+      {
         accessorKey: 'progress',
         header: 'Progreso',
         cell: ({ row }) => (
@@ -343,18 +406,37 @@ export default function StudentsPage() {
                 <Edit className="mr-2 h-4 w-4" />
                 Editar
               </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => handleDeleteAllClasses(row.original)}>
-                <CalendarX className="mr-2 h-4 w-4" />
-                Eliminar todas las clases
-              </DropdownMenuItem>
+              {row.original.isActive && (
+                <DropdownMenuItem onClick={() => handleDeleteAllClasses(row.original)}>
+                  <CalendarX className="mr-2 h-4 w-4" />
+                  Eliminar clases no pagadas
+                </DropdownMenuItem>
+              )}
               <DropdownMenuSeparator />
-              <DropdownMenuItem
-                className="text-destructive"
-                onClick={() => handleDelete(row.original)}
-              >
-                <Trash2 className="mr-2 h-4 w-4" />
-                Eliminar alumno
-              </DropdownMenuItem>
+              {row.original.isActive ? (
+                row.original.hasPayments ? (
+                  <DropdownMenuItem
+                    className="text-destructive"
+                    onClick={() => handleDeactivate(row.original)}
+                  >
+                    <UserX className="mr-2 h-4 w-4" />
+                    Inactivar alumno
+                  </DropdownMenuItem>
+                ) : (
+                  <DropdownMenuItem
+                    className="text-destructive"
+                    onClick={() => handleHardDelete(row.original)}
+                  >
+                    <Trash2 className="mr-2 h-4 w-4" />
+                    Eliminar alumno
+                  </DropdownMenuItem>
+                )
+              ) : (
+                <DropdownMenuItem onClick={() => handleReactivate(row.original)}>
+                  <UserCheck className="mr-2 h-4 w-4" />
+                  Reactivar alumno
+                </DropdownMenuItem>
+              )}
             </DropdownMenuContent>
           </DropdownMenu>
         ),
@@ -595,11 +677,11 @@ export default function StudentsPage() {
       <motion.div
         initial={{ opacity: 0, y: 10 }}
         animate={{ opacity: 1, y: 0 }}
-        className="flex flex-wrap gap-3"
+        className="flex flex-wrap items-center gap-3"
       >
         <div className="flex items-center gap-2">
           <Filter className="h-4 w-4 text-muted-foreground" />
-          <span className="text-sm font-medium">Filtrar por estado:</span>
+          <span className="text-sm font-medium">Filtrar por estado de pago:</span>
         </div>
         {[
           { value: 'all', label: 'Todos' },
@@ -616,6 +698,14 @@ export default function StudentsPage() {
             {filter.label}
           </Button>
         ))}
+        <div className="flex items-center gap-2 sm:ml-auto">
+          <Checkbox
+            id="show-inactive-students"
+            checked={showInactive}
+            onCheckedChange={(checked) => setShowInactive(checked === true)}
+          />
+          <Label htmlFor="show-inactive-students">Mostrar alumnos inactivos</Label>
+        </div>
       </motion.div>
 
       <motion.div
@@ -626,24 +716,24 @@ export default function StudentsPage() {
       >
         <div className="rounded-lg border border-border bg-card p-4">
           <p className="text-sm text-muted-foreground">Total Alumnos</p>
-          <p className="text-2xl font-bold">{students.length}</p>
+          <p className="text-2xl font-bold">{activeStudents.length}</p>
         </div>
         <div className="rounded-lg border border-border bg-card p-4">
           <p className="text-sm text-muted-foreground">Pagados</p>
           <p className="text-2xl font-bold text-green-600">
-            {students.filter((s) => s.paymentStatus === 'paid').length}
+            {activeStudents.filter((s) => s.paymentStatus === 'paid').length}
           </p>
         </div>
         <div className="rounded-lg border border-border bg-card p-4">
           <p className="text-sm text-muted-foreground">Pendientes</p>
           <p className="text-2xl font-bold text-yellow-600">
-            {students.filter((s) => s.paymentStatus === 'pending').length}
+            {activeStudents.filter((s) => s.paymentStatus === 'pending').length}
           </p>
         </div>
         <div className="rounded-lg border border-border bg-card p-4">
           <p className="text-sm text-muted-foreground">Vencidos</p>
           <p className="text-2xl font-bold text-red-600">
-            {students.filter((s) => s.paymentStatus === 'overdue').length}
+            {activeStudents.filter((s) => s.paymentStatus === 'overdue').length}
           </p>
         </div>
       </motion.div>
