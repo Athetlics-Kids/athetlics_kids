@@ -82,6 +82,7 @@ const PAYMENT_METHODS = ['Pendiente', 'Efectivo', 'Nequi', 'PSE', 'Tarjeta de Cr
 type PaymentForm = {
   studentId: string
   amount: string
+  planConfigId: string
   planType: PlanType | ''
   dueDate: string
   status: PaymentStatus
@@ -91,6 +92,7 @@ type PaymentForm = {
 const emptyForm: PaymentForm = {
   studentId: '',
   amount: '',
+  planConfigId: '',
   planType: '',
   dueDate: '',
   status: 'pending',
@@ -169,11 +171,26 @@ export default function PaymentsPage() {
     .filter((p) => p.status === 'overdue')
     .reduce((sum, p) => sum + p.amount, 0)
 
+  const resolvePlanForPayment = (payment: Payment) => {
+    if (payment.planType === 'one_off') {
+      return (
+        plans.find((p) => p.planType === 'one_off') ??
+        plans.find((p) => p.label.toLowerCase().includes('única') || p.label.toLowerCase().includes('unica'))
+      )
+    }
+    return (
+      plans.find((p) => p.planType === payment.planType && p.price === payment.amount) ??
+      plans.find((p) => p.planType === payment.planType) ??
+      plans[0]
+    )
+  }
+
   const openCreate = () => {
     setEditing(null)
     setForm({
       ...emptyForm,
       dueDate: new Date().toISOString().slice(0, 10),
+      planConfigId: plans[0]?.id ?? '',
       planType: plans[0]?.planType ?? 'monthly',
       amount: String(plans[0]?.price ?? ''),
     })
@@ -181,10 +198,12 @@ export default function PaymentsPage() {
   }
 
   const openEdit = (payment: Payment) => {
+    const plan = resolvePlanForPayment(payment)
     setEditing(payment)
     setForm({
       studentId: payment.studentId,
       amount: String(payment.amount),
+      planConfigId: plan?.id ?? '',
       planType: payment.planType,
       dueDate: toInputDate(payment.dueDate),
       status: payment.status,
@@ -196,26 +215,32 @@ export default function PaymentsPage() {
 
   const onStudentChange = (studentId: string) => {
     const student = students.find((s) => s.id === studentId)
-    const plan = plans.find((p) => p.planType === (student?.planType ?? form.planType))
+    const plan =
+      plans.find((p) => p.planType === student?.planType) ??
+      plans.find((p) => p.id === form.planConfigId) ??
+      plans[0]
     setForm((f) => ({
       ...f,
       studentId,
-      planType: student?.planType ?? f.planType,
+      planConfigId: plan?.id ?? f.planConfigId,
+      planType: plan?.planType ?? student?.planType ?? f.planType,
       amount: plan ? String(plan.price) : f.amount,
     }))
   }
 
-  const onPlanChange = (planType: PlanType) => {
-    const plan = plans.find((p) => p.planType === planType)
+  const onPlanChange = (planConfigId: string) => {
+    const plan = plans.find((p) => p.id === planConfigId)
+    if (!plan) return
     setForm((f) => ({
       ...f,
-      planType,
-      amount: plan ? String(plan.price) : f.amount,
+      planConfigId: plan.id,
+      planType: plan.planType,
+      amount: String(plan.price),
     }))
   }
 
   const handleSave = async () => {
-    if (!form.studentId || !form.planType || !form.dueDate || !form.amount) {
+    if (!form.studentId || !form.planConfigId || !form.planType || !form.dueDate || !form.amount) {
       toast.error('Completa todos los campos')
       return
     }
@@ -245,13 +270,22 @@ export default function PaymentsPage() {
           invoiceNumber: generateInvoiceNumber(),
         })
 
-    setSaving(false)
-
     if (!result.ok) {
+      setSaving(false)
       toast.error(result.error)
       return
     }
 
+    // Sincroniza el plan del alumno con el elegido en el pago (clases/semana, etc.)
+    await client
+      .from('students')
+      .update({
+        plan_config_id: form.planConfigId,
+        plan_type: form.planType,
+      })
+      .eq('id', form.studentId)
+
+    setSaving(false)
     toast.success(editing ? 'Pago actualizado' : 'Pago creado')
     setDialogOpen(false)
     refetch()
@@ -259,15 +293,14 @@ export default function PaymentsPage() {
 
   const openScheduleDialog = (payment: Payment) => {
     const student = students.find((s) => s.id === payment.studentId)
-    const plan = plans.find((p) => p.planType === payment.planType)
-    const needed = plan?.classesPerWeek ?? 1
+    const plan = resolvePlanForPayment(payment)
+    const needed = plan?.planType === 'one_off' ? 1 : (plan?.classesPerWeek ?? 1)
     setWeekdays([])
     setScheduleTime('09:00')
     setScheduleTeacherId(student?.teacherId || 'none')
     setScheduleLocation('local')
     setScheduleAddress(student?.address ?? '')
     setSchedulePayment(payment)
-    // hint in toast
     if (needed > 1) {
       toast.message(`Elige ${needed} días de la semana para este plan`)
     }
@@ -289,7 +322,7 @@ export default function PaymentsPage() {
 
   const handleGenerateClasses = async () => {
     if (!schedulePayment) return
-    const plan = resolveSchedulePlan(schedulePayment)
+    const plan = resolvePlanForPayment(schedulePayment)
     const isOneOff = plan?.planType === 'one_off' || schedulePayment.planType === 'one_off'
     const needed = isOneOff ? 1 : (plan?.classesPerWeek ?? 1)
     if (weekdays.length !== needed) {
@@ -301,7 +334,17 @@ export default function PaymentsPage() {
       return
     }
     setScheduling(true)
-    const result = await generateClassesFromPayment(createClient(), {
+    const client = createClient()
+    if (plan?.id) {
+      await client
+        .from('students')
+        .update({
+          plan_config_id: plan.id,
+          plan_type: plan.planType,
+        })
+        .eq('id', schedulePayment.studentId)
+    }
+    const result = await generateClassesFromPayment(client, {
       paymentId: schedulePayment.id,
       weekdays,
       startTime: scheduleTime,
@@ -323,18 +366,8 @@ export default function PaymentsPage() {
     refetch()
   }
 
-  const resolveSchedulePlan = (payment: Payment) => {
-    if (payment.planType === 'one_off') {
-      return plans.find((p) => p.planType === 'one_off') ?? plans.find((p) => p.label === 'Clase única')
-    }
-    return (
-      plans.find((p) => p.planType === payment.planType && p.label.includes(`${payment.planType}`)) ??
-      plans.find((p) => p.planType === payment.planType)
-    )
-  }
-
   const toggleWeekday = (day: number) => {
-    const plan = schedulePayment ? resolveSchedulePlan(schedulePayment) : null
+    const plan = schedulePayment ? resolvePlanForPayment(schedulePayment) : null
     const isOneOff = plan?.planType === 'one_off' || schedulePayment?.planType === 'one_off'
     const needed = isOneOff ? 1 : (plan?.classesPerWeek ?? 1)
     setWeekdays((prev) => {
@@ -351,8 +384,7 @@ export default function PaymentsPage() {
     if (!confirm(`¿Renovar el plan de ${payment.studentName}? Se creará un nuevo pago pendiente.`)) {
       return
     }
-    const student = students.find((s) => s.id === payment.studentId)
-    const plan = plans.find((p) => p.planType === payment.planType)
+    const plan = resolvePlanForPayment(payment)
     const result = await renewStudentPlan(createClient(), {
       studentId: payment.studentId,
       planConfigId: plan?.id,
@@ -641,16 +673,16 @@ export default function PaymentsPage() {
             <div className="grid gap-2">
               <Label>Plan</Label>
               <Select
-                value={form.planType}
-                onValueChange={(value) => onPlanChange(value as PlanType)}
+                value={form.planConfigId || undefined}
+                onValueChange={onPlanChange}
               >
                 <SelectTrigger>
                   <SelectValue placeholder="Seleccionar plan" />
                 </SelectTrigger>
                 <SelectContent>
                   {plans.map((plan) => (
-                    <SelectItem key={plan.id} value={plan.planType}>
-                      {formatPlanConfigLabel(plan.label, plan.price)}
+                    <SelectItem key={plan.id} value={plan.id}>
+                      {formatPlanConfigLabel(plan.label, plan.price, plan.classesPerWeek)}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -948,8 +980,7 @@ export default function PaymentsPage() {
                   {schedulePayment.planType === 'one_off'
                     ? 'Día de la clase (solo 1)'
                     : `Días de la semana (${
-                        plans.find((p) => p.planType === schedulePayment.planType)
-                          ?.classesPerWeek ?? 1
+                        resolvePlanForPayment(schedulePayment)?.classesPerWeek ?? 1
                       } requerido${
                         weekdays.length
                           ? ` · ${weekdays.length} elegido${weekdays.length === 1 ? '' : 's'}`

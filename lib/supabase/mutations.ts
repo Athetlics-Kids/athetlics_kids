@@ -503,7 +503,7 @@ export async function getStudentClassQuota(
   const [{ data: payments, error: payErr }, { data: student }] = await Promise.all([
     supabase
       .from('payments')
-      .select('id, status, plan_type')
+      .select('id, status, plan_type, amount')
       .eq('student_id', studentId)
       .eq('status', 'paid'),
     supabase
@@ -517,7 +517,7 @@ export async function getStudentClassQuota(
 
   const { data: plans } = await supabase
     .from('plan_configs')
-    .select('id, plan_type, classes_per_week, duration_months')
+    .select('id, plan_type, classes_per_week, duration_months, price')
     .eq('is_active', true)
     .order('sort_order')
 
@@ -527,6 +527,9 @@ export async function getStudentClassQuota(
     let classesPerWeek = 1
     let durationMonths = 1
 
+    const byAmount = (plans ?? []).find(
+      (p) => String(p.plan_type) === planType && Number(p.price) === Number(payment.amount)
+    )
     const studentPlan =
       student?.plan_config_id &&
       (plans ?? []).find(
@@ -534,7 +537,7 @@ export async function getStudentClassQuota(
           p.id === student.plan_config_id && String(p.plan_type) === planType
       )
     const byType = (plans ?? []).find((p) => String(p.plan_type) === planType)
-    const plan = studentPlan || byType
+    const plan = byAmount || studentPlan || byType
 
     if (plan) {
       classesPerWeek = Number(plan.classes_per_week ?? 1)
@@ -1183,30 +1186,33 @@ export async function generateClassesFromPayment(
   let classesPerWeek = 1
   let durationMonths = 1
   let planType = payment.plan_type as string
-  const planId = student.plan_config_id as string | null
-  if (planId) {
-    const { data: plan } = await supabase
-      .from('plan_configs')
-      .select('classes_per_week, duration_months, label, plan_type')
-      .eq('id', planId)
-      .maybeSingle()
-    if (plan) {
-      classesPerWeek = Number(plan.classes_per_week ?? 1)
-      durationMonths = Number(plan.duration_months ?? 1)
-      planType = (plan.plan_type as string) || planType
-    }
-  } else {
-    const { data: plan } = await supabase
-      .from('plan_configs')
-      .select('classes_per_week, duration_months, plan_type')
-      .eq('plan_type', payment.plan_type)
-      .order('sort_order')
-      .limit(1)
-      .maybeSingle()
-    if (plan) {
-      classesPerWeek = Number(plan.classes_per_week ?? 1)
-      durationMonths = Number(plan.duration_months ?? 1)
-      planType = (plan.plan_type as string) || planType
+
+  // Preferir el plan que coincide con el monto del pago (varios monthly con distinto cupo)
+  const { data: planConfigs } = await supabase
+    .from('plan_configs')
+    .select('id, plan_type, classes_per_week, duration_months, price')
+    .eq('is_active', true)
+    .order('sort_order')
+
+  const paymentAmount = Number(payment.amount)
+  const byAmount = (planConfigs ?? []).find(
+    (p) => String(p.plan_type) === planType && Number(p.price) === paymentAmount
+  )
+  const byStudent =
+    student.plan_config_id &&
+    (planConfigs ?? []).find((p) => p.id === student.plan_config_id)
+  const byType = (planConfigs ?? []).find((p) => String(p.plan_type) === planType)
+  const plan = byAmount || byStudent || byType
+
+  if (plan) {
+    classesPerWeek = Number(plan.classes_per_week ?? 1)
+    durationMonths = Number(plan.duration_months ?? 1)
+    planType = (plan.plan_type as string) || planType
+    if (byAmount && student.plan_config_id !== plan.id) {
+      await supabase
+        .from('students')
+        .update({ plan_config_id: plan.id, plan_type: plan.plan_type })
+        .eq('id', student.id)
     }
   }
 
